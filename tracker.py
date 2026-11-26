@@ -25,7 +25,9 @@ SKIP_TITLES = {
     "top", "all games", "games", "genres", "categories", "popular",
     "new games", "free games", "simulation", "racing", "horror", "sports",
     "download now", "download", "recent updates", "view all", "see more",
-    "read more", "more info", "play now"
+    "read more", "more info", "play now",
+    "free pre-installed pc games - direct download",
+    "free pre-installed pc games",
 }
 
 BLOCKED_PATH_PARTS = {
@@ -36,17 +38,23 @@ BLOCKED_PATH_PARTS = {
 }
 
 
+def normalize_url(url: str) -> str:
+    clean = url.split("#", 1)[0].split("?", 1)[0].strip()
+    return clean.rstrip("/")
+
+
 def load_seen_games() -> list[str]:
     if not os.path.exists(STATE_FILE):
         return []
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
-        return data if isinstance(data, list) else []
+        return [normalize_url(x) for x in data] if isinstance(data, list) else []
 
 
 def save_seen_games(seen: list[str]) -> None:
+    deduped = list(dict.fromkeys(normalize_url(x) for x in seen if x))
     with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(seen[-400:], f, indent=2, ensure_ascii=False)
+        json.dump(deduped[-500:], f, indent=2, ensure_ascii=False)
 
 
 def title_from_slug(url: str) -> str:
@@ -58,11 +66,19 @@ def title_from_slug(url: str) -> str:
     return slug.title() if len(slug) >= 2 else ""
 
 
+def is_generic_landing_title(title: str) -> bool:
+    low = title.lower()
+    if "pre-installed pc games" in low or "direct download" in low:
+        return True
+    return False
+
+
 def clean_game_entry(url: str, raw_title: str) -> dict | None:
-    parsed = urlparse(url)
+    norm_url = normalize_url(url)
+    parsed = urlparse(norm_url)
     path = parsed.path.strip("/").lower()
 
-    if not path or "#" in url or parsed.netloc.lower() != urlparse(TARGET_URL).netloc.lower():
+    if not path or parsed.netloc.lower() != urlparse(TARGET_URL).netloc.lower():
         return None
 
     parts = path.split("/")
@@ -72,10 +88,13 @@ def clean_game_entry(url: str, raw_title: str) -> dict | None:
     title = " ".join(raw_title.split()).strip()
     lower_title = title.lower()
 
+    if is_generic_landing_title(title):
+        return None
+
     if lower_title in SKIP_TITLES or len(title) < 2:
         if any(word in lower_title for word in ("download", "recent updates", "view all", "see more")):
-            slug_title = title_from_slug(url)
-            if slug_title and slug_title.lower() not in SKIP_TITLES:
+            slug_title = title_from_slug(norm_url)
+            if slug_title and slug_title.lower() not in SKIP_TITLES and not is_generic_landing_title(slug_title):
                 title = slug_title
             else:
                 return None
@@ -87,7 +106,7 @@ def clean_game_entry(url: str, raw_title: str) -> dict | None:
 
     return {
         "title": title[:200],
-        "url": url,
+        "url": norm_url,
     }
 
 
@@ -98,21 +117,27 @@ def scrape_latest_games() -> list[dict]:
     soup = BeautifulSoup(resp.text, "html.parser")
     games = []
     seen_urls = set()
+    seen_titles = set()
 
     for anchor in soup.select("a[href]"):
         href = anchor.get("href", "").strip()
         if not href:
             continue
 
-        full_url = urljoin(TARGET_URL, href)
-        if full_url in seen_urls:
+        full_url = normalize_url(urljoin(TARGET_URL, href))
+        if not full_url or full_url in seen_urls:
             continue
 
         entry = clean_game_entry(full_url, anchor.get_text(" ", strip=True))
         if not entry:
             continue
 
+        title_key = entry["title"].lower()
+        if title_key in seen_titles:
+            continue
+
         seen_urls.add(full_url)
+        seen_titles.add(title_key)
         games.append(entry)
 
         if len(games) >= 15:
@@ -137,18 +162,19 @@ def fetch_game_details(game_url: str, fallback_title: str) -> dict:
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # পেজের মূল Heading থাকলে সেটি নেওয়া
         h1 = soup.find("h1")
         if h1:
             h1_text = " ".join(h1.get_text(" ", strip=True).split())
-            if h1_text and len(h1_text) <= 180:
+            if h1_text and len(h1_text) <= 180 and not is_generic_landing_title(h1_text):
                 details["title"] = h1_text
 
-        # কভার/থাম্বনেইল ছবি খুঁজে বের করা
         og_img = soup.find("meta", property="og:image")
         if og_img and og_img.get("content"):
-            details["image_url"] = urljoin(game_url, og_img["content"].strip())
-        else:
+            img_candidate = urljoin(game_url, og_img["content"].strip())
+            if "logo" not in img_candidate.lower():
+                details["image_url"] = img_candidate
+
+        if not details["image_url"]:
             for img in soup.find_all("img"):
                 src = (img.get("src") or img.get("data-src") or "").strip()
                 if not src or any(x in src.lower() for x in ("logo", "icon", "avatar", "svg")):
@@ -156,7 +182,6 @@ def fetch_game_details(game_url: str, fallback_title: str) -> dict:
                 details["image_url"] = urljoin(game_url, src)
                 break
 
-        # পেজের লাইন/ব্লক থেকে Version, Release Date, Genres, Developer, Overview বের করা
         lines = [
             " ".join(el.get_text(" ", strip=True).split())
             for el in soup.find_all(["p", "li", "div", "tr", "span"])
@@ -176,23 +201,23 @@ def fetch_game_details(game_url: str, fallback_title: str) -> dict:
             if details["release_date"] == "N/A" and ("release date" in low or "released" in low) and len(line) < 100:
                 parts = re.split(r"release date\s*[:\-]?|released\s*[:\-]?", line, flags=re.I)
                 if len(parts) > 1 and parts[-1].strip():
-                    details["release_date"] = parts[-1].strip()[:60]
+                    details["release_date"] = parts[-1].strip(" /:-")[:60]
                 elif i + 1 < len(lines) and len(lines[i + 1]) < 50:
-                    details["release_date"] = lines[i + 1][:60]
+                    details["release_date"] = lines[i + 1].strip(" /:-")[:60]
 
             if details["genres"] == "N/A" and ("genre" in low or "genres" in low) and len(line) < 150:
                 parts = re.split(r"genres?\s*[:\-]?", line, flags=re.I)
                 if len(parts) > 1 and parts[-1].strip():
-                    details["genres"] = parts[-1].strip()[:120]
+                    details["genres"] = parts[-1].strip(" /:-")[:120]
                 elif i + 1 < len(lines) and len(lines[i + 1]) < 100:
-                    details["genres"] = lines[i + 1][:120]
+                    details["genres"] = lines[i + 1].strip(" /:-")[:120]
 
             if details["developer"] == "N/A" and ("developer" in low or "studio" in low) and len(line) < 120:
                 parts = re.split(r"(?:developer|studio)\s*[:\-]?", line, flags=re.I)
                 if len(parts) > 1 and parts[-1].strip():
-                    details["developer"] = parts[-1].strip()[:100]
+                    details["developer"] = parts[-1].strip(" /:-")[:100]
                 elif i + 1 < len(lines) and len(lines[i + 1]) < 80:
-                    details["developer"] = lines[i + 1][:100]
+                    details["developer"] = lines[i + 1].strip(" /:-")[:100]
 
             if details["overview"] == "Visit the game page for full details and download links." and ("overview" in low or "about this game" in low or "description" in low):
                 parts = re.split(r"(?:overview|about this game|description)\s*[:\-]?", line, flags=re.I)
@@ -217,7 +242,7 @@ def send_discord_notification(game: dict) -> None:
         "title": f"🎮 {info['title']} has been added!",
         "url": game["url"],
         "description": "Experience the latest addition to our gaming library. Visit the game page to learn more.",
-        "color": 0x7C3AED,  # পার্পল কালার (ছবির স্টাইলের সাথে মিলিয়ে)
+        "color": 0x7C3AED,
         "fields": [
             {
                 "name": "📦 Version",
