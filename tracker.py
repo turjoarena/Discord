@@ -1,6 +1,6 @@
 import json
 import os
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
@@ -17,6 +17,14 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
+SKIP_WORDS = {
+    "home", "login", "register", "signup", "dmca", "privacy", "terms",
+    "contact", "about", "faq", "help", "requests", "updates", "launcher",
+    "fighting", "classic", "anime", "adventure", "action", "trending",
+    "top", "all games", "games", "genres", "categories", "popular",
+    "new games", "free games", "simulation", "racing", "horror", "sports"
+}
+
 
 def load_seen_games() -> list[str]:
     if not os.path.exists(STATE_FILE):
@@ -28,7 +36,37 @@ def load_seen_games() -> list[str]:
 
 def save_seen_games(seen: list[str]) -> None:
     with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(seen[-200:], f, indent=2, ensure_ascii=False)
+        json.dump(seen[-300:], f, indent=2, ensure_ascii=False)
+
+
+def is_likely_game_link(url: str, title: str) -> bool:
+    parsed = urlparse(url)
+    path = parsed.path.strip("/").lower()
+
+    if not path or "#" in url:
+        return False
+
+    lower_title = title.strip().lower()
+    if lower_title in SKIP_WORDS or len(lower_title) < 2:
+        return False
+
+    blocked_paths = (
+        "login", "register", "signup", "dmca", "privacy", "terms",
+        "contact", "about", "faq", "category", "categories", "genre",
+        "genres", "tag", "tags", "search", "page"
+    )
+    if any(part in blocked_paths for part in path.split("/")):
+        return False
+
+    # অনেক গেম সাইটে গেমের লিংক /game/<slug> আকারে থাকে; না থাকলেও গভীর পাথ/স্লাগ ধরে
+    if "/game/" in f"/{path}/" or path.startswith("game/"):
+        return True
+
+    # সাধারণত ক্যাটাগরি/মেনু লিংক ১ শব্দের হয়, গেমের নাম বা স্লাগে '-' বা একাধিক শব্দ থাকে
+    if "-" in path or " " in title.strip():
+        return True
+
+    return False
 
 
 def scrape_latest_games() -> list[dict]:
@@ -42,15 +80,14 @@ def scrape_latest_games() -> list[dict]:
         href = anchor.get("href", "").strip()
         title = " ".join(anchor.get_text(" ", strip=True).split())
 
-        if not title or len(title) < 2:
+        if not title:
             continue
 
         full_url = urljoin(TARGET_URL, href)
         if not full_url.startswith(TARGET_URL):
             continue
 
-        lower_url = full_url.lower()
-        if any(skip in lower_url for skip in ["/login", "/register", "/dmca", "/privacy", "/terms", "#"]):
+        if not is_likely_game_link(full_url, title):
             continue
 
         games.append({
@@ -95,7 +132,7 @@ def main() -> None:
     games = scrape_latest_games()
 
     if not games:
-        print("কোনো গেমের লিংক পাওয়া যায়নি। CSS selector বা Cloudflare চেক করুন।")
+        print("কোনো গেমের লিংক পাওয়া যায়নি।")
         return
 
     new_items = [g for g in reversed(games) if g["url"] not in seen]
