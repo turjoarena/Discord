@@ -28,13 +28,23 @@ SKIP_TITLES = {
     "read more", "more info", "play now",
     "free pre-installed pc games - direct download",
     "free pre-installed pc games",
+    # ভাষার নামগুলো বাদ দেওয়া
+    "english", "中文", "简体中文", "繁體中文", "русский", "português",
+    "portugues", "español", "espanol", "deutsch", "français", "francais",
+    "日本語", "한국어", "العربية", "हिन्दी", "বাংলা", "türkçe", "turkce",
+    "italiano", "polski", "vietnamese", "thai", "indonesian", "language",
+    "languages"
 }
 
 BLOCKED_PATH_PARTS = {
     "login", "register", "signup", "dmca", "privacy", "terms",
     "contact", "about", "faq", "category", "categories", "genre",
     "genres", "tag", "tags", "search", "page", "requests", "updates",
-    "launcher", "discord", "telegram", "youtube"
+    "launcher", "discord", "telegram", "youtube",
+    # ভাষা/locale পাথ বাদ দেওয়া
+    "lang", "language", "languages", "en", "zh", "zh-cn", "zh-tw",
+    "ru", "pt", "pt-br", "es", "de", "fr", "ja", "ko", "ar", "hi",
+    "bn", "tr", "it", "pl", "vi", "th", "id"
 }
 
 
@@ -73,6 +83,10 @@ def is_generic_landing_title(title: str) -> bool:
     return False
 
 
+def has_english_letters(text: str) -> bool:
+    return bool(re.search(r"[A-Za-z]", text))
+
+
 def clean_game_entry(url: str, raw_title: str) -> dict | None:
     norm_url = normalize_url(url)
     parsed = urlparse(norm_url)
@@ -88,16 +102,24 @@ def clean_game_entry(url: str, raw_title: str) -> dict | None:
     title = " ".join(raw_title.split()).strip()
     lower_title = title.lower()
 
-    if is_generic_landing_title(title):
+    if is_generic_landing_title(title) or lower_title in SKIP_TITLES:
         return None
 
-    if lower_title in SKIP_TITLES or len(title) < 2:
-        if any(word in lower_title for word in ("download", "recent updates", "view all", "see more")):
-            slug_title = title_from_slug(norm_url)
-            if slug_title and slug_title.lower() not in SKIP_TITLES and not is_generic_landing_title(slug_title):
-                title = slug_title
-            else:
-                return None
+    # গেমের নাম সাধারণত ইংরেজি/ASCII অক্ষরে থাকে; বিদেশি ভাষার মেনু বাদ দেওয়া
+    if not has_english_letters(title):
+        slug_title = title_from_slug(norm_url)
+        if slug_title and has_english_letters(slug_title) and slug_title.lower() not in SKIP_TITLES:
+            title = slug_title
+        else:
+            return None
+
+    if len(title) < 2:
+        return None
+
+    if any(word in lower_title for word in ("download", "recent updates", "view all", "see more")):
+        slug_title = title_from_slug(norm_url)
+        if slug_title and slug_title.lower() not in SKIP_TITLES and not is_generic_landing_title(slug_title):
+            title = slug_title
         else:
             return None
 
@@ -165,7 +187,12 @@ def fetch_game_details(game_url: str, fallback_title: str) -> dict:
         h1 = soup.find("h1")
         if h1:
             h1_text = " ".join(h1.get_text(" ", strip=True).split())
-            if h1_text and len(h1_text) <= 180 and not is_generic_landing_title(h1_text):
+            if (
+                h1_text
+                and len(h1_text) <= 180
+                and has_english_letters(h1_text)
+                and not is_generic_landing_title(h1_text)
+            ):
                 details["title"] = h1_text
 
         og_img = soup.find("meta", property="og:image")
