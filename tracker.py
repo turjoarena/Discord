@@ -28,7 +28,7 @@ SKIP_TITLES = {
     "read more", "more info", "play now",
     "free pre-installed pc games - direct download",
     "free pre-installed pc games",
-    # ভাষার নামগুলো বাদ দেওয়া
+    # ভাষার নামগুলো বাদ দেওয়া
     "english", "中文", "简体中文", "繁體中文", "русский", "português",
     "portugues", "español", "espanol", "deutsch", "français", "francais",
     "日本語", "한국어", "العربية", "हिन्दी", "বাংলা", "türkçe", "turkce",
@@ -41,7 +41,7 @@ BLOCKED_PATH_PARTS = {
     "contact", "about", "faq", "category", "categories", "genre",
     "genres", "tag", "tags", "search", "page", "requests", "updates",
     "launcher", "discord", "telegram", "youtube",
-    # ভাষা/locale পাথ বাদ দেওয়া
+    # ভাষা/locale পাথ বাদ দেওয়া
     "lang", "language", "languages", "en", "zh", "zh-cn", "zh-tw",
     "ru", "pt", "pt-br", "es", "de", "fr", "ja", "ko", "ar", "hi",
     "bn", "tr", "it", "pl", "vi", "th", "id"
@@ -105,7 +105,7 @@ def clean_game_entry(url: str, raw_title: str) -> dict | None:
     if is_generic_landing_title(title) or lower_title in SKIP_TITLES:
         return None
 
-    # গেমের নাম সাধারণত ইংরেজি/ASCII অক্ষরে থাকে; বিদেশি ভাষার মেনু বাদ দেওয়া
+    # গেমের নাম সাধারণত ইংরেজি/ASCII অক্ষরে থাকে; বিদেশি ভাষার মেনু বাদ দেওয়া
     if not has_english_letters(title):
         slug_title = title_from_slug(norm_url)
         if slug_title and has_english_letters(slug_title) and slug_title.lower() not in SKIP_TITLES:
@@ -261,7 +261,7 @@ def fetch_game_details(game_url: str, fallback_title: str) -> dict:
 
 def send_discord_notification(game: dict) -> None:
     if not WEBHOOK_URL:
-        raise RuntimeError("DISCORD_WEBHOOK_URL environment variable পাওয়া যায়নি।")
+        raise RuntimeError("DISCORD_WEBHOOK_URL environment variable পাওয়া যায়নি।")
 
     info = fetch_game_details(game["url"], game["title"])
 
@@ -311,7 +311,8 @@ def send_discord_notification(game: dict) -> None:
         embed["thumbnail"] = {"url": info["image_url"]}
 
     payload = {
-        "content": "**New Game Added!**",
+        "content": "**New Game Added!** @everyone",
+        "allowed_mentions": {"parse": ["everyone"]},
         "embeds": [embed],
     }
 
@@ -324,7 +325,7 @@ def main() -> None:
     games = scrape_latest_games()
 
     if not games:
-        print("কোনো গেমের লিংক পাওয়া যায়নি।")
+        print("কোনো গেমের লিংক পাওয়া যায়নি।")
         return
 
     new_items = [g for g in reversed(games) if g["url"] not in seen]
@@ -335,7 +336,7 @@ def main() -> None:
         print(f"Sent: {game['title']} -> {game['url']}")
 
     save_seen_games(seen)
-    print(f"মোট নতুন গেম পাঠানো হয়েছে: {len(new_items)}")
+    print(f"মোট নতুন গেম পাঠানো হয়েছে: {len(new_items)}")
 
 
 if __name__ == "__main__":
